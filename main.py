@@ -9,6 +9,7 @@ el contenido de las imágenes.
 
 import base64
 import os
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -17,11 +18,32 @@ from pydantic import BaseModel
 
 from pipeline import process_auto, process_manual
 
+# ------------------------------------------------------------------
+# Falla al arrancar si falta cualquier variable de seguridad, en vez
+# de arrancar "abierto" en silencio cuando alguien olvida configurarla.
+# ------------------------------------------------------------------
+API_KEY = os.environ.get("PROCESSING_API_KEY")
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN")
+ALLOWED_IMAGE_HOST = os.environ.get("ALLOWED_IMAGE_HOST")  # ej: xxxxx.supabase.co
+
+_missing = [
+    name
+    for name, value in [
+        ("PROCESSING_API_KEY", API_KEY),
+        ("ALLOWED_ORIGIN", ALLOWED_ORIGIN),
+        ("ALLOWED_IMAGE_HOST", ALLOWED_IMAGE_HOST),
+    ]
+    if not value
+]
+if _missing:
+    raise RuntimeError(
+        "Faltan variables de entorno obligatorias: " + ", ".join(_missing) +
+        ". El servicio se niega a arrancar sin ellas (fail-closed) en vez de "
+        "quedar abierto por accidente."
+    )
+
 app = FastAPI(title="Client Document Manager — Processing Service")
 
-# Restringe qué sitios pueden llamar a este servicio desde el navegador.
-# Ajusta ALLOWED_ORIGIN si cambias el dominio de Netlify.
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN],
@@ -29,12 +51,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_KEY = os.environ.get("PROCESSING_API_KEY")
-
 
 def check_api_key(x_api_key: str | None):
-    if API_KEY and x_api_key != API_KEY:
+    if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def check_image_url(url: str):
+    """Bloquea SSRF: solo se permite descargar imágenes del propio
+    proyecto de Supabase, nunca una URL arbitraria que mande quien sea."""
+    host = urlparse(url).hostname or ""
+    if host != ALLOWED_IMAGE_HOST:
+        raise HTTPException(status_code=400, detail="image_url_host_not_allowed")
 
 
 class ProcessRequest(BaseModel):
@@ -62,6 +90,7 @@ def health():
 @app.post("/process")
 async def process_endpoint(body: ProcessRequest, x_api_key: str | None = Header(default=None)):
     check_api_key(x_api_key)
+    check_image_url(body.image_url)
     image_bytes = await download_image(body.image_url)
     result = process_auto(image_bytes)
 
@@ -84,6 +113,7 @@ async def process_endpoint(body: ProcessRequest, x_api_key: str | None = Header(
 @app.post("/process-manual")
 async def process_manual_endpoint(body: ProcessManualRequest, x_api_key: str | None = Header(default=None)):
     check_api_key(x_api_key)
+    check_image_url(body.image_url)
     if len(body.corners) != 4:
         raise HTTPException(status_code=400, detail="exactly_4_corners_required")
 
