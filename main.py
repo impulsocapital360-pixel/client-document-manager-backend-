@@ -22,14 +22,14 @@ from pipeline import process_auto, process_manual
 # Falla al arrancar si falta cualquier variable de seguridad, en vez
 # de arrancar "abierto" en silencio cuando alguien olvida configurarla.
 # ------------------------------------------------------------------
-API_KEY = os.environ.get("PROCESSING_API_KEY")
+API_KEYS = {k.strip() for k in os.environ.get("PROCESSING_API_KEYS", "").split(",") if k.strip()}
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN")
 ALLOWED_IMAGE_HOST = os.environ.get("ALLOWED_IMAGE_HOST")  # ej: xxxxx.supabase.co
 
 _missing = [
     name
     for name, value in [
-        ("PROCESSING_API_KEY", API_KEY),
+        ("PROCESSING_API_KEYS", API_KEYS),
         ("ALLOWED_ORIGIN", ALLOWED_ORIGIN),
         ("ALLOWED_IMAGE_HOST", ALLOWED_IMAGE_HOST),
     ]
@@ -53,7 +53,10 @@ app.add_middleware(
 
 
 def check_api_key(x_api_key: str | None):
-    if x_api_key != API_KEY:
+    # x_api_key debe estar en el conjunto de llaves válidas — cada quien
+    # (tu frontend, un tercero) usa la suya, y se puede revocar una sola
+    # quitándola de PROCESSING_API_KEYS sin tocar las demás.
+    if x_api_key not in API_KEYS:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
